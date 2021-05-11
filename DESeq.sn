@@ -1,0 +1,165 @@
+configfile: "config_files/DESeq2_config.yaml"
+
+rule all:
+	input:
+		"../Results/Bulk-RNA/1_QC/MultiQC/multiqc_report.html",
+		expand("../Results/Bulk-RNA/3_Chimp_Mapping/{chimp}_Aligned.sortedByCoord.out.bam", chimp=config['Chimp']),
+		expand("../Results/Bulk-RNA/3_Chimp_Mapping/{chimp}.bam", chimp=config['Chimp']),
+		"../Results/7_DESeq/Exon_FeatureCounts.csv",
+		"../Results/7_DESeq/Matrices/DiffExp_L1HS"
+
+##Quality Control
+rule FastQC:
+	input:
+		S1=expand("../Data/Bulk-RNA/{chimp}_R1.fastq.gz", chimp=config['Chimp']),
+		S2=expand("../Data/Bulk-RNA/{chimp}_R2.fastq.gz", chimp=config['Chimp'])
+
+	output:
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{chimp}_R1_fastqc.zip", chimp=config['Chimp']),
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{chimp}_R2_fastqc.zip", chimp=config['Chimp'])
+
+	priority: 16
+	shell:
+		"""
+		ml FastQC/0.11.8-Java-11
+		fastqc {input} -t 6 -o ../Results/Bulk-RNA/1_QC/FastQC/
+		module purge
+		"""
+
+rule MultiQC:
+	input:
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{chimp}_R1_fastqc.zip", chimp=config['Chimp']),
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{chimp}_R2_fastqc.zip", chimp=config['Chimp'])
+	output:
+		"../Results/Bulk-RNA/1_QC/MultiQC/multiqc_report.html"
+	priority: 15
+	shell:
+		"""
+		ml icc/2017.4.196-GCC-6.4.0-2.28 impi/2017.3.196 MultiQC/1.2-Python-2.7.14
+		multiqc {input} -o ../Results/1_QC/MultiQC/
+		module purge
+		"""
+
+#Mapping reads to hg38
+rule Mapping:
+	input:
+		S1="../Data/Chimp_data/{chimp}_R1.fastq.gz",
+		S2="../Data/Chimp_data/{chimp}_R2.fastq.gz"
+	output:
+		bam="../Results/Bulk-RNA/3_Chimp_Mapping/{chimp,\w+}_Aligned.sortedByCoord.out.bam"
+	params:
+		index="/projects/fs1/common/genome/lunarc/indicies/star/human/hg38/",
+		sjdbg="../Data/gencode.v35.annotation.gtf"
+	priority: 14
+	shell:
+		"""
+		ml GCC/5.4.0-2.26 OpenMPI/1.10.3 STAR/2.6.0c
+		STAR --readFilesCommand gunzip -c \
+		--runThreadN 20 \
+		--limitBAMsortRAM 1448375592 \
+		--outSAMattributes All \
+		--outSAMtype BAM SortedByCoordinate \
+		--sjdbGTFfile {params.sjdbg} \
+		--genomeDir {params.index} \
+		--outFileNamePrefix ../Results/Bulk-RNA/3_Chimp_Mapping/{wildcards.chimp}_ \
+		--outFilterMultimapNmax 1 --outFilterMismatchNoverLmax 0.03 \
+		--readFilesIn {input.S1} {input.S2}
+		module purge
+		"""
+
+rule FeatureCounts:
+	input:
+		h=expand("../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam", sample=config["SAMPLES"]),
+		c=expand("../Results/Bulk-RNA/3_Chimp_Mapping/{chimp}_Aligned.sortedByCoord.out.bam", chimp=config["Chimp"])
+	output:
+		"../Results/7_DESeq/Exon_FeatureCounts.csv"
+	shell:
+		"""
+		module load GCC/7.3.0-2.30 OpenMPI/3.1.1 Subread/1.6.3
+		featureCounts -s2 -F GTF -g exon_id -a ../Data/gencode.v35.annotation.gtf -o {output} {input.h} {input.c}
+		module purge
+		"""
+
+rule Sort_Bam:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/{sample}.bam"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/{sample}.sorted.bam"
+	shell:
+		"""
+		module purge
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools sort -o {output} {input}
+		module purge
+		"""
+rule Index_Bam:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam.bai"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools index -b {input} {output}
+		module purge
+		"""
+
+rule BamtoBigwig:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam.bai",
+		bam="../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/{sample}.bw"
+	params:
+		normalize="normalizeUsingRPKM"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+		bamCoverage -b {input.bam} -o {output} --{params.normalize}
+		module purge
+		"""
+rule Compute_RNA_matrix:
+	input:
+		signal=expand("../Results/Bulk-RNA/2_Mapping/{sample}.bw", sample=config['SAMPLES']),
+		L1=expand("../Data/orientation_{L1}.bed", L1=config['L1s'])
+	output:
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.signal} -R {input.L1} -a 5000 -b 5000 -o {output}
+		module purge
+		"""
+
+rule plot_Heatmaps:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix.png"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		plotHeatmap -m {input} --sortRegions no --colorList "white, red" -o {input}.png
+		module purge
+		"""
+
+rule DiffExp_L1HS:
+	input:
+		H3K9=expand("../Results/2_Mapping/{H3K9_matrix}.bw", H3K9_matrix=config["H3K9_matrix"]),
+		H3K27=expand("../Results/2_Mapping/{H3K27_matrix}.bw", H3K27_matrix=config["H3K27_matrix"]),
+		H3K4me1=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		H3K4me3=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		RNAseq=expand("../Results/Bulk-RNA/2_Mapping/{sample}.bw", sample=config["SAMPLES"]),
+		upreg="../Data/DiffExp_L1HS/L1HS_up.bed",
+		downreg="../Data/DiffExp_L1HS/L1HS_down.bed",
+		posit="../Data/DiffExp_L1HS/L1HS_posit.bed",
+		negat="../Data/DiffExp_L1HS/L1HS_negat.bed"
+	output:
+		"../Results/7_DESeq/Matrices/DiffExp_L1HS"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 4 -m 6000 -S {input.H3K4me1} {input.H3K4me3} {input.H3K9} {input.H3K27} {input.RNAseq} -R {input.upreg} {input.downreg} {input.posit} {input.negat} \
+		-a 5000 -b 5000 -o ../Results/7_DESeq/Matrices/DiffExp_L1HS
+		module purge
+		"""

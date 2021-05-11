@@ -1,0 +1,125 @@
+configfile: "config_files/Bulk-RNA_config.yaml"
+
+rule all:
+	input:
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{sample}_R1_fastqc.zip", sample=config['SAMPLES']),
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{sample}_R2_fastqc.zip", sample=config['SAMPLES']),
+		"../Results/Bulk-RNA/1_QC/MultiQC/multiqc_report.html",
+		expand("../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam", sample=config['SAMPLES']),
+		expand("../Results/Bulk-RNA/2_Mapping/{sample}.bw", sample=config['SAMPLES']),
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix",
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix.png"
+
+##Quality assessment with FastQC and MultiQC
+rule FastQC:
+	input:
+		S1=expand("../Data/Bulk-RNA/{sample}_R1.fastq.gz", sample=config['SAMPLES']),
+		S2=expand("../Data/Bulk-RNA/{sample}_R2.fastq.gz", sample=config['SAMPLES'])
+
+	output:
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{sample}_R1_fastqc.zip", sample=config['SAMPLES']),
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{sample}_R2_fastqc.zip", sample=config['SAMPLES'])
+
+	priority: 16
+	shell:
+		"""
+		ml FastQC/0.11.8-Java-11
+		fastqc {input} -t 6 -o ../Results/Bulk-RNA/1_QC/FastQC/
+		module purge
+		"""
+
+rule MultiQC:
+	input:
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{sample}_R1_fastqc.zip", sample=config['SAMPLES']),
+		expand("../Results/Bulk-RNA/1_QC/FastQC/{sample}_R2_fastqc.zip", sample=config['SAMPLES'])
+	output:
+		"../Results/Bulk-RNA/1_QC/MultiQC/multiqc_report.html"
+	priority: 15
+	shell:
+		"""
+		ml icc/2017.4.196-GCC-6.4.0-2.28 impi/2017.3.196 MultiQC/1.2-Python-2.7.14
+		multiqc {input} -o ../Results/1_QC/MultiQC/
+		module purge
+		"""
+
+##Mapping Bulk-RNA reads to hg38
+rule Mapping:
+	input:
+		S1="../Data/Bulk-RNA/{sample}_R1.fastq.gz",
+		S2="../Data/Bulk-RNA/{sample}_R2.fastq.gz"
+	output:
+		bam="../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam"
+
+	params:
+		index="/projects/fs1/common/genome/lunarc/indicies/star/human/hg38/",
+		sjdbg="../Data/gencode.v35.annotation.gtf"
+	priority: 14
+	shell:
+		"""
+		ml GCC/5.4.0-2.26 OpenMPI/1.10.3 STAR/2.6.0c
+		STAR --readFilesCommand gunzip -c \
+		--runThreadN 20 \
+		--limitBAMsortRAM 34564760621 \
+		--outSAMattributes All \
+		--outSAMtype BAM SortedByCoordinate \
+		--sjdbGTFfile {params.sjdbg} \
+		--genomeDir {params.index} \
+		--outFileNamePrefix ../Results/Bulk-RNA/2_Mapping/{wildcards.sample}_ \
+		--outFilterMultimapNmax 1 --outFilterMismatchNoverLmax 0.03 \
+		--readFilesIn {input.S1} {input.S2}
+		module purge
+		"""
+
+##Preparing the BAMs to be transformed to BigWigs by indexing
+rule Index_Bam:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam.bai"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools index -b {input} {output}
+		module purge
+		"""
+
+rule BamtoBigwig:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam.bai",
+		bam="../Results/Bulk-RNA/2_Mapping/{sample}_Aligned.sortedByCoord.out.bam"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/{sample}.bw"
+	params:
+		normalize="normalizeUsingRPKM"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+		bamCoverage -b {input.bam} -o {output} --{params.normalize}
+		module purge
+		"""
+
+#Compute the RNA signal at FL-L1s
+rule Compute_RNA_matrix:
+	input:
+		signal=expand("../Results/Bulk-RNA/2_Mapping/{sample}.bw", sample=config['SAMPLES']),
+		L1=expand("../Data/orientation_{L1}.bed", L1=config['L1s'])
+	output:
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.signal} -R {input.L1} -a 5000 -b 5000 -o {output}
+		module purge
+		"""
+
+rule plot_Heatmaps:
+	input:
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix"
+	output:
+		"../Results/Bulk-RNA/2_Mapping/matrices/RNA_Seq_matrix.png"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		plotHeatmap -m {input} --sortRegions no --colorList "white, red" -o {input}.png
+		module purge
+		"""

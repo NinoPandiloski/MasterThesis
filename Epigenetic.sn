@@ -1,0 +1,485 @@
+configfile: "config_files/runs.yaml"
+
+rule all:
+	input:
+		expand("../Results/1_QC/FastQC/{H3K9me3}_001_fastqc.zip", H3K9me3=config['H3K9me3']),
+		expand("../Results/1_QC/FastQC/{H3K27me3}_001_fastqc.zip", H3K27me3=config['H3K27me3']),
+		expand("../Results/1_QC/FastQC/{H3K4me}_001_fastqc.zip", H3K4me=config['H3K4me']),
+		"../Results/1_QC/MultiQC/multiqc_report.html",
+		expand("../Results/2_Mapping/{mapping}_filtered.sorted.bam.bai", mapping=config["Mapping"]),
+		expand("../Results/2_Mapping/{mapping}.bw", mapping=config["Mapping"]),
+		expand("../Results/3_Intersect_TE/{mapping}_{location}.sorted.bam.bai", mapping=config["Mapping"], location=config["Locations"]),
+		"../Results/3_Intersect_TE/matrices/all_H3K4me1_matrices.png",
+		"../Results/3_Intersect_TE/matrices/all_H3K4me1_HERV_matrices.png",
+		expand("../Results/4_SEACR/{sample}.stringent.bed", sample=config["samples"]),
+		expand("../Results/5_PeaksIntersect_L1/{peak}_extended_{location}.stringent.bed", peak=config["peaks"], location=config["Locations"]),
+		expand("../Results/5_PeaksIntersect_L1/Matrices/{peak}_L1_matrix.png", peak=config["peaks"]),
+		expand("../Results/6_GeneIntersects/{location}_genes.bed", location=config["Locations"]),
+		"../Results/6_GeneIntersects/matrices/genes_L1_matrix.png"
+		
+##Quality assesment of the data
+rule FastQC:
+	input:
+		H3K9=expand("../Data/H3K9me3/{H3K9me3}_001.fastq.gz", H3K9me3=config['H3K9me3']),
+		H3K27=expand("../Data/H3K27me3/{H3K27me3}_001.fastq.gz", H3K27me3=config['H3K27me3']),
+		H3K4=expand("../Data/H3K4me/{H3K4me}_001.fastq.gz", H3K4me=config['H3K4me'])
+
+	output:
+		expand("../Results/1_QC/FastQC/{H3K9me3}_001_fastqc.zip", H3K9me3=config['H3K9me3']),
+		expand("../Results/1_QC/FastQC/{H3K27me3}_001_fastqc.zip", H3K27me3=config['H3K27me3']),
+		expand("../Results/1_QC/FastQC/{H3K4me}_001_fastqc.zip", H3K4me=config['H3K4me'])
+
+	priority: 16
+	shell:
+		"""
+		ml FastQC/0.11.8-Java-11
+		fastqc {input} -t 6 -o ../Results/1_QC/FastQC/
+		module purge
+		"""
+rule MultiQC:
+	input:
+		expand("../Results/1_QC/FastQC/{H3K9me3}_001_fastqc.zip", H3K9me3=config['H3K9me3']),
+		expand("../Results/1_QC/FastQC/{H3K27me3}_001_fastqc.zip", H3K27me3=config['H3K27me3']),
+		expand("../Results/1_QC/FastQC/{H3K4me}_001_fastqc.zip", H3K4me=config['H3K4me'])
+	output:
+		"../Results/1_QC/MultiQC/multiqc_report.html"
+	priority: 15
+	shell:
+		"""
+		ml icc/2017.4.196-GCC-6.4.0-2.28 impi/2017.3.196 MultiQC/1.2-Python-2.7.14
+		multiqc {input} -o ../Results/1_QC/MultiQC/
+		module purge
+		"""
+
+#Mapping the reads to hg38 to get SAM files
+rule Mapping:
+	input:
+		forward="../Data/{mapping}_R1_001.fastq.gz",
+		reverse="../Data/{mapping}_R2_001.fastq.gz"
+	output:
+		"../Results/2_Mapping/{mapping}.sam"
+	params:
+		index="/projects/fs1/common/genome/lunarc/indicies/bowtie2/human/hg38/hg38",
+		parameters="--local --very-sensitive-local --no-unal --no-mixed --no-discordant --phred33 -I 10 -X 700"
+	priority: 14
+	
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 Bowtie2/2.3.4.2
+		bowtie2 {params.parameters} -x {params.index} -1 {input.forward} -2 {input.reverse} -S {output}
+		module purge
+		"""
+#Transforming SAMs to binary files - BAMs
+rule SamtoBam:
+	input:
+		"../Results/2_Mapping/{mapping}.sam"
+	output:
+		"../Results/2_Mapping/{mapping}.bam"
+	priority: 13
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools view -bS {input} > {output}
+		module purge
+		"""
+
+#Filtering BAMs according to their quality (MAPQ >= 10)
+rule Filter_Bam:
+	input:
+		"../Results/2_Mapping/{mapping}.bam"
+	output:
+		"../Results/2_Mapping/{mapping}_filtered.bam",
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools view -bq 10 {input} > {output}
+		module purge
+		"""
+
+##Preparing the data for BigWig transfromation by sorting and indexing
+rule Sort_Bam:
+	input:
+		"../Results/2_Mapping/{mapping}_filtered.bam"
+	output:
+		"../Results/2_Mapping/{mapping}_filtered.sorted.bam"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools sort -o {output} {input}
+		module purge
+		"""
+rule Index_Bam:
+	input:
+		"../Results/2_Mapping/{mapping}_filtered.sorted.bam"
+	output:
+		"../Results/2_Mapping/{mapping}_filtered.sorted.bam.bai"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools index -b {input}
+		module purge
+		"""
+
+#Intersecting the data signal with the genomic regions of FL-TEs
+rule IntersectBAM_TEs:
+	input:
+		"../Results/2_Mapping/{mapping}_filtered.bam"
+	output:
+		"../Results/3_Intersect_TE/{mapping}_{location,\w+}.bam"
+	params:
+		TEs="../Data/{location}.bed"
+	priority:12
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		bedtools intersect -wa -a {input} -b {params.TEs} > {output}
+		module purge
+		"""
+
+##Preparing the TE intersections for BigWig transformation as done before
+rule sortBam_TEs:
+	input:
+		"../Results/3_Intersect_TE/{mapping}_{location}.bam"
+	output:
+		"../Results/3_Intersect_TE/{mapping}_{location}.sorted.bam"
+
+	priority: 11
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools sort -o {output} {input}
+		"""
+
+rule IndexBam_TEs:
+	input:
+		"../Results/3_Intersect_TE/{mapping}_{location}.sorted.bam"
+	output:
+		"../Results/3_Intersect_TE/{mapping}_{location}.sorted.bam.bai"
+	priority: 10
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools index -b {input}
+		module purge
+		"""
+
+
+#Transforming the BAMs to BigWigs
+rule BamtoBigwig:
+	input:
+		bam="../Results/2_Mapping/{mapping}_filtered.sorted.bam",
+		ind_bam="../Results/2_Mapping/{mapping}_filtered.sorted.bam.bai"
+	output:
+		"../Results/2_Mapping/{mapping}.bw"
+	params:
+		normalize="normalizeUsingRPKM"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+		bamCoverage -b {input.bam} -o {output} --{params.normalize}
+		module purge
+		"""
+
+##Computing the signal matrix for genomic regions of FL-TEs
+rule Compute_Signal_L1:
+	input:
+		H3K9=expand("../Results/2_Mapping/{H3K9_matrix}.bw", H3K9_matrix=config["H3K9_matrix"]),
+		H3K27=expand("../Results/2_Mapping/{H3K27_matrix}.bw", H3K27_matrix=config["H3K27_matrix"]),
+		H3K4me1=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		H3K4me3=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		all_H3K4me1=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		all_H3K4me3=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		RNAseq=expand("../Results/Bulk-RNA/2_Mapping/{RNA}.bw", RNA=config["Bulk-RNA"]),
+		L1=expand("../Data/orientation_{L1}.bed", L1=config["L1s"])
+		
+	output:
+		H3K9="../Results/3_Intersect_TE/matrices/H3K9_matrix",
+		H3K27="../Results/3_Intersect_TE/matrices/H3K27_matrix",
+		H3K4me1="../Results/3_Intersect_TE/matrices/H3K4me1_matrix",
+		H3K4me3="../Results/3_Intersect_TE/matrices/H3K4me3_matrix",
+		all_H3K4me1="../Results/3_Intersect_TE/matrices/all_H3K4me1_matrices",
+		all_H3K4me3="../Results/3_Intersect_TE/matrices/all_H3K4me3_matrices" 
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.H3K9} -R {input.L1} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K9_matrix
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.H3K27} -R {input.L1} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K27_matrix
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.H3K4me1} -R {input.L1} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K4me1_matrix
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.H3K4me3} -R {input.L1} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K4me3_matrix
+		computeMatrix scale-regions -p 4 -m 6000 --sortUsingSamples 1 2 -S {input.H3K4me1} {input.H3K9} {input.H3K27} {input.H3K4me3} {input.RNAseq} -R {input.L1} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/all_H3K4me1_matrices
+		computeMatrix scale-regions -p 4 -m 6000 --sortUsingSamples 1 2 -S {input.H3K4me3} {input.H3K9} {input.H3K27} {input.H3K4me1} {input.RNAseq} -R {input.L1} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/all_H3K4me3_matrices
+		module purge
+		"""
+
+rule Compute_Signal_HERV:
+	input:
+		L1s="../Results/3_Intersect_TE/matrices/H3K4me1_matrix",
+		H3K9=expand("../Results/2_Mapping/{H3K9_matrix}.bw", H3K9_matrix=config["H3K9_matrix"]),
+		H3K27=expand("../Results/2_Mapping/{H3K27_matrix}.bw", H3K27_matrix=config["H3K27_matrix"]),
+		H3K4me1=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		H3K4me3=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		all_H3K4mono=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		all_H3K4tri=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		RNAseq=expand("../Results/Bulk-RNA/2_Mapping/{RNA}.bw", RNA=config["Bulk-RNA"]),
+		HERV=expand("../Data/orientation_{HERV}.bed", HERV=config["HERVs"])
+	output:
+		H3K9="../Results/3_Intersect_TE/matrices/H3K9_HERV_matrix",
+		H3K27="../Results/3_Intersect_TE/matrices/H3K27_HERV_matrix",
+		H3K4me1="../Results/3_Intersect_TE/matrices/H3K4me1_HERV_matrix",
+		H3K4me3="../Results/3_Intersect_TE/matrices/H3K4me3_HERV_matrix",
+		all_H3K4me1="../Results/3_Intersect_TE/matrices/all_H3K4me1_HERV_matrices",
+		all_H3K4me3="../Results/3_Intersect_TE/matrices/all_H3K4me3_HERV_matrices"
+	shell:
+                """
+                ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend -S {input.H3K9} -R {input.HERV} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K9_HERV_matrix
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend -S {input.H3K27} -R {input.HERV} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K27_HERV_matrix
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend -S {input.H3K4me1} -R {input.HERV} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K4me1_HERV_matrix
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend -S {input.H3K4me3} -R {input.HERV} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/H3K4me3_HERV_matrix
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend --sortUsingSamples 1 2 -S {input.H3K4me1} {input.H3K9} {input.H3K27} {input.H3K4me3} {input.RNAseq} -R {input.HERV} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/all_H3K4me1_HERV_matrices
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend --sortUsingSamples 1 2 -S {input.H3K4me3} {input.H3K9} {input.H3K27} {input.H3K4me1} {input.RNAseq} -R {input.HERV} -a 5000 -b 5000 -o ../Results/3_Intersect_TE/matrices/all_H3K4me3_HERV_matrices
+		module purge
+		"""
+
+##Plotting the epigenetic marks over the elements 
+rule plotL1s:
+	input:
+		H3K9="../Results/3_Intersect_TE/matrices/H3K9_matrix",
+		H3K27="../Results/3_Intersect_TE/matrices/H3K27_matrix",
+		H3K4me1="../Results/3_Intersect_TE/matrices/H3K4me1_matrix",
+		H3K4me3="../Results/3_Intersect_TE/matrices/H3K4me3_matrix",
+		all_H3K4me1="../Results/3_Intersect_TE/matrices/all_H3K4me1_matrices",
+		all_H3K4me3="../Results/3_Intersect_TE/matrices/all_H3K4me3_matrices"
+	output:
+		"../Results/3_Intersect_TE/matrices/H3K9_matrix.png",
+		"../Results/3_Intersect_TE/matrices/H3K27_matrix.png",
+		"../Results/3_Intersect_TE/matrices/H3K4me1_matrix.png",
+		"../Results/3_Intersect_TE/matrices/H3K4me3_matrix.png",
+		"../Results/3_Intersect_TE/matrices/all_H3K4me1_matrices.png",
+		"../Results/3_Intersect_TE/matrices/all_H3K4me3_matrices.png"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		plotHeatmap -m {input.H3K9} --sortRegions no --colorList "white, red" -o {input.H3K9}.png
+		plotHeatmap -m {input.H3K27} --sortRegions no --colorList "white, green" -o {input.H3K27}.png
+		plotHeatmap -m {input.H3K4me1} --sortRegions no --colorList "white, orange" -o {input.H3K4me1}.png
+		plotHeatmap -m {input.H3K4me3} --sortRegions no --colorList "white, black" -o {input.H3K4me3}.png
+		plotHeatmap -m {input.all_H3K4me1} --sortRegions no --colorList "white, blue" -o {input.all_H3K4me1}.png
+		plotHeatmap -m {input.all_H3K4me3} --sortRegions no --colorList "white, blue" -o {input.all_H3K4me3}.png
+		"""
+
+rule plotHERVs:
+	input:
+		"../Results/3_Intersect_TE/matrices/all_H3K4me1_matrices.png",
+		H3K9="../Results/3_Intersect_TE/matrices/H3K9_HERV_matrix",
+		H3K27="../Results/3_Intersect_TE/matrices/H3K27_HERV_matrix",
+		H3K4me1="../Results/3_Intersect_TE/matrices/H3K4me1_HERV_matrix",
+		H3K4me3="../Results/3_Intersect_TE/matrices/H3K4me3_HERV_matrix",
+		all_H3K4me1="../Results/3_Intersect_TE/matrices/all_H3K4me1_HERV_matrices",
+		all_H3K4me3="../Results/3_Intersect_TE/matrices/all_H3K4me3_HERV_matrices"
+	output:
+		"../Results/3_Intersect_TE/matrices/H3K9_HERV_matrix.png",
+		"../Results/3_Intersect_TE/matrices/H3K27_HERV_matrix.png",
+		"../Results/3_Intersect_TE/matrices/H3K4me1_HERV_matrix.png",
+		"../Results/3_Intersect_TE/matrices/H3K4me3_HERV_matrix.png",
+		"../Results/3_Intersect_TE/matrices/all_H3K4me1_HERV_matrices.png",
+		"../Results/3_Intersect_TE/matrices/all_H3K4me3_HERV_matrices.png"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		plotHeatmap -m {input.H3K9} --sortRegions no --colorList "white, red" -o {input.H3K9}.png
+		plotHeatmap -m {input.H3K27} --sortRegions no --colorList "white, red" -o {input.H3K27}.png
+		plotHeatmap -m {input.H3K4me1} --sortRegions no --colorList "white, red" -o {input.H3K4me1}.png
+		plotHeatmap -m {input.H3K4me3} --sortRegions no --colorList "white, red" -o {input.H3K4me3}.png
+		plotHeatmap -m {input.all_H3K4me1} --sortRegions no --colorList "white, red" -o {input.all_H3K4me1}.png
+		plotHeatmap -m {input.all_H3K4me3} --sortRegions no --colorList "white, red" -o {input.all_H3K4me3}.png
+		"""
+
+##Preparing the BAMs for peak calling with SEACR and by transforming them to BEDgraphs 
+rule BamtoBed:
+	input:
+		"../Results/2_Mapping/{mapping}_filtered.bam"
+	output:
+		"../Results/4_SEACR/{mapping}.bed"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		bedtools bamtobed -bedpe -i {input} > {output}
+		module purge
+		"""
+
+rule sortBed:
+	input:
+		"../Results/4_SEACR/{mapping,\w+}.bed"
+	output:
+		clean="../Results/4_SEACR/{mapping}.clean.bed",
+		fragments="../Results/4_SEACR/{mapping}.fragments.bed"
+	priority: 8
+	shell:
+		"""
+		ml GCC/5.4.0-2.26 OpenMPI/1.10.3 BEDTools/2.26.0
+		awk '$1==$4 && $6-$2 < 1000 {{print $0}}' {input} > {output.clean}
+		cut -f 1,2,6 {output.clean} | sort -k1,1 -k2,2n -k3,3n > {output.fragments}
+		module purge
+		"""
+
+rule BedtoBedgraph:
+	input:
+		"../Results/4_SEACR/{mapping}.fragments.bed"
+	output:
+		"../Results/4_SEACR/{mapping}.fragments.bedgraph"
+	priority: 7
+	params:
+		index="~/../../projects/fs1/common/genome/lunarc/genomes/human/hg38/hg38.chrom.sizes.txt"
+	shell:
+		"""
+ 		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+ 		bedtools genomecov -bg -i {input} -g {params.index} > {output}
+ 		module purge
+ 		"""
+
+rule SEACR:
+	input:
+		expand("../Results/4_SEACR/{sample}.fragments.bedgraph", sample=config["samples"]),
+		expand("../Results/4_SEACR/{control}.fragments.bedgraph", control=config["controls"])
+	output:
+		expand("../Results/4_SEACR/{sample}.stringent.bed", sample=config["samples"])
+	priority: 6
+	run:
+		for i in range(len(config["samples"])):
+			samp=config["samples"][i]
+			cont=config["controls"][i]
+			shell("ml GCC/8.2.0-2.31.1 OpenMPI/3.1.3 R/3.6.0; bash SEACR_1.3.sh ../Results/4_SEACR/{samp}.fragments.bedgraph ../Results/4_SEACR/{cont}.fragments.bedgraph norm stringent ../Results/4_SEACR/{samp}")
+
+
+##Intersecting the epigenetic mark peaks with FL-TEs
+#Merging the peaks of the two samples to capture TEs carrying epig. marks from both samples
+rule merge_Peaks:
+	input:
+		S1=expand("../Results/4_SEACR/{peak}_S1.stringent.bed", peak=config["peaks"]),
+		S2=expand("../Results/4_SEACR/{peak}_S2.stringent.bed", peak=config["peaks"])
+	output:
+		merg=expand("../Results/5_PeaksIntersect_L1/{peak}_merged.stringent.bed", peak=config["peaks"])
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		cat {input.S1} {input.S2} | sort -k 1,1 -k2,2n | mergeBed -i stdin > {output.merg}
+		module purge
+		"""
+
+rule IntersectPeaks:
+	input:
+		peaks="../Results/5_PeaksIntersect_L1/{peak}_merged.stringent.bed",
+		elem="../Data/orientation_{location}.bed",
+		ext_elem="../Data/extended_orientation_{location}.bed"
+	output:
+		body="../Results/5_PeaksIntersect_L1/{peak}_{location}.stringent.bed",
+		ext="../Results/5_PeaksIntersect_L1/{peak}_extended_{location}.stringent.bed"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26 OpenMPI/1.10.3 BEDTools/2.26.0
+		intersectBed -wa -a {input.elem} -b {input.peaks} > {output.body}
+		intersectBed -wa -a {input.ext_elem} -b {input.peaks} > {output.ext}
+		module purge
+		"""
+
+##Computing and visualizing signal matrices for the regions of peaks-TE overlaps
+rule Compute_PeakOverlaps:
+	input:
+		S1=expand("../Results/2_Mapping/{peak}_S1.bw", peak=config["peaks"]),
+		S2=expand("../Results/2_Mapping/{peak}_S2.bw", peak=config["peaks"]),
+		RNAseq=expand("../Results/Bulk-RNA/2_Mapping/{RNA}.bw", RNA=config["Bulk-RNA"]),
+		L1=expand("../Results/5_PeaksIntersect_L1/{{peak}}_extended_{L1}.stringent.bed", L1=config["L1s"]),
+		HERV=expand("../Results/5_PeaksIntersect_L1/{{peak}}_extended_{HERV}.stringent.bed", HERV=config["HERVs"])
+	output:
+		L1="../Results/5_PeaksIntersect_L1/Matrices/{peak}_L1_matrix",
+		HERV="../Results/5_PeaksIntersect_L1/Matrices/{peak}_HERV_matrix"
+	priority: 14
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions keep -S {input.S1} {input.S2} {input.RNAseq} -R {input.L1} -a 5000 -b 5000 -o {output.L1}
+		computeMatrix scale-regions -p 2 -m 6000 --sortRegions descend -S {input.S1} {input.S2} {input.RNAseq} -R {input.HERV} -a 5000 -b 5000 -o {output.HERV}
+		module purge
+		"""
+
+rule Visualize_PeakOverlaps:
+	input:
+		L1="../Results/5_PeaksIntersect_L1/Matrices/{peak}_L1_matrix",
+		HERV="../Results/5_PeaksIntersect_L1/Matrices/{peak}_HERV_matrix"
+	output:
+		L1="../Results/5_PeaksIntersect_L1/Matrices/{peak}_L1_matrix.png",
+		HERV="../Results/5_PeaksIntersect_L1/Matrices/{peak}_HERV_matrix.png"
+	priority: 9
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		plotHeatmap -m {input.L1} --sortRegions no --colorList "white, red" -o {output.L1}
+		plotHeatmap -m {input.HERV} --sortRegions descend --colorList "white, green" -o {output.HERV}
+		module purge
+		"""
+
+#Extracting information from all genes which contain FL-L1s and HERVs in their sequence in GTF and BED
+rule Intersect_Genes_gtf:
+	input:
+		locations="../Data/{location}.bed",
+		gtf="../Data/gencode.v35.annotation.gtf"
+	output:
+		"../Results/6_GeneIntersects/{location}_genes.gtf"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		intersectBed -wa -a {input.gtf} -b {input.locations} | uniq > {output}
+		module purge
+		"""
+
+rule Intersect_Genes_bed:
+	input:
+		"../Results/6_GeneIntersects/{location}_genes.gtf",
+		locations="../Data/orientation_{location}.bed",
+		gtf="../Data/gencode.v35.annotation.gtf"
+	output:
+		"../Results/6_GeneIntersects/{location}_genes.bed"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		intersectBed -wa -a {input.locations} -b {input.gtf} | uniq > {output}
+		module purge
+		"""
+
+##Computing and visualizing the peaks 
+rule compute_Gene_peaks:
+	input:
+		H3K9=expand("../Results/2_Mapping/{H3K9_matrix}.bw", H3K9_matrix=config["H3K9_matrix"]),
+		H3K27=expand("../Results/2_Mapping/{H3K27_matrix}.bw", H3K27_matrix=config["H3K27_matrix"]),
+		H3K4me1=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		H3K4me3=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		all_H3K4me1=expand("../Results/2_Mapping/{H3K4me1_matrix}.bw", H3K4me1_matrix=config["H3K4me1_matrix"]),
+		all_H3K4me3=expand("../Results/2_Mapping/{H3K4me3_matrix}.bw", H3K4me3_matrix=config["H3K4me3_matrix"]),
+		RNAseq=expand("../Results/Bulk-RNA/2_Mapping/{RNA}.bw", RNA=config["Bulk-RNA"]),
+		HERV="../Results/6_GeneIntersects/HERV_genes.bed",
+		L1=expand("../Results/6_GeneIntersects/{L1}_genes.bed", L1=config["L1s"])
+	output:
+		"../Results/6_GeneIntersects/matrices/genes_HERV_matrix",
+		"../Results/6_GeneIntersects/matrices/genes_L1_matrix"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions keep -S {input.H3K4me1} {input.H3K9} {input.H3K27} {input.H3K4me1} {input.RNAseq} -R {input.L1} -a 5000 -b 5000 -o ../Results/6_GeneIntersects/matrices/genes_L1_matrix
+		computeMatrix scale-regions -p 4 -m 6000 --sortRegions descend -S {input.H3K4me1} {input.H3K9} {input.H3K27} {input.H3K4me3} {input.RNAseq} -R {input.HERV} -a 5000 -b 5000 -o ../Results/6_GeneIntersects/matrices/genes_HERV_matrix
+		module purge
+		"""
+rule plot_Gene_peaks:
+	input:
+		HERV="../Results/6_GeneIntersects/matrices/genes_HERV_matrix",
+		L1="../Results/6_GeneIntersects/matrices/genes_L1_matrix"
+	output:
+		"../Results/6_GeneIntersects/matrices/genes_HERV_matrix.png",
+		"../Results/6_GeneIntersects/matrices/genes_L1_matrix.png"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+		plotHeatmap -m {input.L1} --sortRegions no --colorList "white, red" -o {input.L1}.png
+		plotHeatmap -m {input.HERV} --sortRegions no --colorList "white, green" -o {input.HERV}.png
+		module purge
+		"""

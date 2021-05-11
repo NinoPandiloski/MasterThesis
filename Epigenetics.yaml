@@ -1,0 +1,160 @@
+H3K9me3:
+- H3K9_S1_R1
+- H3K9_S1_R2
+- H3K9_S2_R1
+- H3K9_S2_R2
+- H3K9_control_S1_R1
+- H3K9_control_S1_R2
+- H3K9_control_S2_R1
+- H3K9_control_S2_R2
+
+H3K27me3:
+- H3K27me3_S1-T1_R1
+- H3K27me3_S1-T1_R2
+- H3K27me3_S1-T2_R1
+- H3K27me3_S1-T2_R2
+- H3K27me3_S2-T1_R1
+- H3K27me3_S2-T1_R2
+- H3K27me3_S2-T2_R1
+- H3K27me3_S2-T2_R2
+- H3K27me3_control_S1_R1
+- H3K27me3_control_S1_R2
+- H3K27me3_control_S2_R1
+- H3K27me3_control_S2_R2
+
+H3K4me:
+- H3K4me1_S1_R1
+- H3K4me1_S1_R2
+- H3K4me1_S2_R1
+- H3K4me1_S2_R2
+- H3K4me3_S1_R1
+- H3K4me3_S1_R2
+- H3K4me3_S2_R1
+- H3K4me3_S2_R2
+- H3K4me_control_S1_R1
+- H3K4me_control_S1_R2
+- H3K4me_control_S2_R1
+- H3K4me_control_S2_R2
+
+Mapping:
+- H3K9me3/H3K9_S1
+- H3K9me3/H3K9_S2
+- H3K9me3/H3K9_control_S1
+- H3K9me3/H3K9_control_S2
+- H3K27me3/H3K27me3_S1-T1
+- H3K27me3/H3K27me3_S1-T2
+- H3K27me3/H3K27me3_S2-T1
+- H3K27me3/H3K27me3_S2-T2
+- H3K27me3/H3K27me3_control_S1
+- H3K27me3/H3K27me3_control_S2
+- H3K4me/H3K4me1_S1
+- H3K4me/H3K4me1_S2
+- H3K4me/H3K4me3_S1
+- H3K4me/H3K4me3_S2
+- H3K4me/H3K4me_control_S1
+- H3K4me/H3K4me_control_S2
+
+mapping_index:
+- /projects/fs1/common/genome/lunarc/indicies/bowtie2/mouse/mm10/mm10
+
+Locations:
+- L1HS
+- L1PA2
+- L1PA3
+- L1PA4
+- L1PA5
+- L1PA6
+- L1PA7
+- L1PA8
+- HERV
+
+L1s:
+- L1HS
+- L1PA2
+- L1PA3
+- L1PA4
+- L1PA5
+- L1PA6
+- L1PA7
+
+HERVs:
+- HERV
+
+H3K9_matrix:
+- H3K9me3/H3K9_S1
+- H3K9me3/H3K9_S2
+- H3K9me3/H3K9_control_S1
+- H3K9me3/H3K9_control_S2
+
+H3K4me3_matrix:
+- H3K4me/H3K4me3_S1
+- H3K4me/H3K4me3_S2
+- H3K4me/H3K4me_control_S1
+- H3K4me/H3K4me_control_S2
+
+H3K4me1_matrix:
+- H3K4me/H3K4me1_S1
+- H3K4me/H3K4me1_S2
+- H3K4me/H3K4me_control_S1
+- H3K4me/H3K4me_control_S2
+
+H3K27_matrix:
+- H3K27me3/H3K27me3_S1-T1
+- H3K27me3/H3K27me3_S1-T2
+- H3K27me3/H3K27me3_S2-T1
+- H3K27me3/H3K27me3_S2-T2
+- H3K27me3/H3K27me3_control_S1
+- H3K27me3/H3K27me3_control_S2
+
+matrices:
+- H3K9
+- H3K4me3
+- H3K4me1
+- H3K27
+
+samples:
+- H3K9me3/H3K9_S1
+- H3K9me3/H3K9_S2
+- H3K4me/H3K4me3_S1
+- H3K4me/H3K4me3_S2
+- H3K4me/H3K4me1_S1
+- H3K4me/H3K4me1_S2
+- H3K27me3/H3K27me3_S1-T1
+- H3K27me3/H3K27me3_S1-T2
+- H3K27me3/H3K27me3_S2-T1
+- H3K27me3/H3K27me3_S2-T2
+
+controls:
+- H3K9me3/H3K9_control_S1
+- H3K9me3/H3K9_control_S2
+- H3K4me/H3K4me_control_S1
+- H3K4me/H3K4me_control_S2
+- H3K4me/H3K4me_control_S1
+- H3K4me/H3K4me_control_S2
+- H3K27me3/H3K27me3_control_S1
+- H3K27me3/H3K27me3_control_S1
+- H3K27me3/H3K27me3_control_S2
+- H3K27me3/H3K27me3_control_S2
+
+active:
+- H3K4me/H3K4me1_S1
+- H3K4me/H3K4me1_S2
+- H3K4me/H3K4me3_S1
+- H3K4me/H3K4me3_S2
+
+repressive:
+- H3K9me3/H3K9_S1
+- H3K9me3/H3K9_S2
+- H3K9me3/H3K9_S1
+- H3K9me3/H3K9_S2
+
+peaks:
+- H3K9me3/H3K9
+- H3K4me/H3K4me3
+- H3K4me/H3K4me1
+
+Bulk-RNA:
+- Bulk-RNA_S2_B1
+- Bulk-RNA_S2_B2
+- Bulk-RNA_S1_B1
+- Bulk-RNA_S1_B2
